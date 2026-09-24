@@ -4,9 +4,8 @@ import ta
 
 def analyze_market(df):
     """
-    Analyse technique stricte.
+    Analyse un timeframe.
     Retourne BUY, SELL ou NO SIGNAL.
-    Aucun ordre n'est exécuté automatiquement.
     """
 
     if df is None or len(df) < 200:
@@ -22,18 +21,19 @@ def analyze_market(df):
 
     df = df.copy()
 
-    # Indicateurs
+    # Moyennes mobiles
     df["ema20"] = ta.trend.ema_indicator(df["Close"], window=20)
     df["ema50"] = ta.trend.ema_indicator(df["Close"], window=50)
     df["ema200"] = ta.trend.ema_indicator(df["Close"], window=200)
 
+    # RSI
     df["rsi"] = ta.momentum.rsi(df["Close"], window=14)
 
+    # MACD
     macd = ta.trend.MACD(df["Close"])
-    df["macd"] = macd.macd()
-    df["macd_signal"] = macd.macd_signal()
     df["macd_hist"] = macd.macd_diff()
 
+    # ATR
     atr = ta.volatility.AverageTrueRange(
         high=df["High"],
         low=df["Low"],
@@ -45,6 +45,7 @@ def analyze_market(df):
 
     # Dernière bougie
     last = df.iloc[-1]
+    previous = df.iloc[-2]
 
     close = float(last["Close"])
     ema20 = float(last["ema20"])
@@ -54,7 +55,7 @@ def analyze_market(df):
     macd_hist = float(last["macd_hist"])
     atr_value = float(last["atr"])
 
-    if any(pd.isna(x) for x in [
+    values = [
         close,
         ema20,
         ema50,
@@ -62,7 +63,9 @@ def analyze_market(df):
         rsi,
         macd_hist,
         atr_value
-    ]):
+    ]
+
+    if any(pd.isna(value) for value in values):
         return {
             "signal": "NO SIGNAL",
             "score": 0,
@@ -77,16 +80,16 @@ def analyze_market(df):
     sell_score = 0
     reasons = []
 
-    # 1. Tendance principale
+    # 1. Tendance
     if close > ema20 > ema50 > ema200:
         buy_score += 2
-        reasons.append("tendance haussière")
+        reasons.append("trend bullish")
 
     elif close < ema20 < ema50 < ema200:
         sell_score += 2
-        reasons.append("tendance baissière")
+        reasons.append("trend bearish")
 
-    # 2. Position du prix
+    # 2. Prix vs EMA20
     if close > ema20:
         buy_score += 1
 
@@ -96,11 +99,9 @@ def analyze_market(df):
     # 3. RSI
     if 52 <= rsi <= 68:
         buy_score += 1
-        reasons.append("RSI favorable aux acheteurs")
 
     elif 32 <= rsi <= 48:
         sell_score += 1
-        reasons.append("RSI favorable aux vendeurs")
 
     # 4. MACD
     if macd_hist > 0:
@@ -109,8 +110,8 @@ def analyze_market(df):
     elif macd_hist < 0:
         sell_score += 1
 
-    # 5. Momentum de la dernière bougie
-    previous_close = float(df["Close"].iloc[-2])
+    # 5. Momentum
+    previous_close = float(previous["Close"])
 
     if close > previous_close:
         buy_score += 1
@@ -118,17 +119,17 @@ def analyze_market(df):
     elif close < previous_close:
         sell_score += 1
 
-    # Décision stricte
-    signal = "NO SIGNAL"
     score = max(buy_score, sell_score)
 
+    signal = "NO SIGNAL"
+
+    # Signal très strict
     if buy_score >= 5 and buy_score >= sell_score + 2:
         signal = "BUY"
 
     elif sell_score >= 5 and sell_score >= buy_score + 2:
         signal = "SELL"
 
-    # Pas de signal si le marché est contradictoire
     if signal == "NO SIGNAL":
         return {
             "signal": "NO SIGNAL",
@@ -140,9 +141,10 @@ def analyze_market(df):
             "reason": "Configuration insuffisamment confirmée"
         }
 
-    # Gestion du risque basée sur ATR
+    # Entry
     entry = close
 
+    # Stop Loss / Take Profit basés sur ATR
     if signal == "BUY":
         stop_loss = entry - (1.2 * atr_value)
         take_profit = entry + (2.4 * atr_value)
